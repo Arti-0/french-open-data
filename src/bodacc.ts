@@ -7,13 +7,13 @@
  * Open data, no credentials. Announcements concern legal entities (a public
  * register), not private individuals.
  */
-import { fetchJson } from "./http";
+import { fetchJson } from "./http.js";
 import type {
   BodaccAnnouncement,
   BodaccSearchParams,
   BodaccSearchResult,
   Provenance,
-} from "./types";
+} from "./types.js";
 
 const ENDPOINT =
   "https://bodacc-datadila.opendatasoft.com/api/records/1.0/search/";

@@ -4,13 +4,16 @@
   "description": "Typed, zero-dependency TypeScript clients for French public open-data APIs: company search (API Recherche d'Entreprises / Sirene), BODACC legal announcements, and France Travail job offers.",
   "license": "MIT",
   "type": "module",
-  "module": "src/index.ts",
-  "types": "src/index.ts",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "files": [
-    "src"
+    "dist"
   ],
   "keywords": [
     "france",
@@ -25,6 +28,9 @@
     "api-gouv"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "bun run build",
+    "test:package": "node scripts/smoke-package.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "bun test",

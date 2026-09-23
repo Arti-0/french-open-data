@@ -22,6 +22,11 @@ Plus a small bounded-timeout fetch core and a curated, **empirically validated**
 bun add french-open-data   # or npm / pnpm / yarn
 ```
 
+The npm package is pending its first publication. Until then, install a packed
+release artifact from this repository. Published releases contain compiled ESM
+JavaScript and TypeScript declarations; Node 18+ can import them without a
+TypeScript loader.
+
 ## Company search (keyless)
 
 ```ts
@@ -90,6 +95,7 @@ Every NAF code must return companies nationwide and every commune code must retu
 ```sh
 bun install
 bun run typecheck && bun run lint && bun run test
+bun run build && node scripts/smoke-package.mjs
 ```
 
 Tests mock `fetch` — CI never touches the live APIs.

@@ -3,7 +3,7 @@
  * default. Suitable for a single process; plug in your own implementation
  * (Redis, KV…) for anything shared.
  */
-import type { ResponseCache } from "./types";
+import type { ResponseCache } from "./types.js";
 
 interface Entry {
   value: string;

@@ -10,13 +10,13 @@
  * refreshed 60 seconds before their announced expiry, so a token is never
  * used in its final, race-prone minute.
  */
-import { fetchWithTimeout, OpenDataError } from "./http";
+import { fetchWithTimeout, OpenDataError } from "./http.js";
 import type {
   JobOffer,
   JobOfferSearchParams,
   JobOfferSearchResult,
   Provenance,
-} from "./types";
+} from "./types.js";
 
 const TOKEN_URL =
   "https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=%2Fpartenaire";

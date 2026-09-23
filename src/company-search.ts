@@ -12,14 +12,14 @@
  *   keyed by the request URL (a deterministic serialization of the params).
  *   Cache errors are swallowed: a broken cache falls back to a live request.
  */
-import { fetchJson } from "./http";
+import { fetchJson } from "./http.js";
 import type {
   Company,
   CompanySearchParams,
   CompanySearchResult,
   Provenance,
   ResponseCache,
-} from "./types";
+} from "./types.js";
 
 const SEARCH_ENDPOINT = "https://recherche-entreprises.api.gouv.fr/search";
 const SOURCE = "API Recherche d'Entreprises (recherche-entreprises.api.gouv.fr)";

@@ -6,6 +6,7 @@ export type {
   BodaccSearchParams,
   BodaccSearchResult,
   Company,
+  CompanyManager,
   CompanySearchParams,
   CompanySearchResult,
   JobOffer,

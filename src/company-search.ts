@@ -15,6 +15,7 @@
 import { fetchJson } from "./http.js";
 import type {
   Company,
+  CompanyManager,
   CompanySearchParams,
   CompanySearchResult,
   Provenance,
@@ -25,14 +26,30 @@ const SEARCH_ENDPOINT = "https://recherche-entreprises.api.gouv.fr/search";
 const SOURCE = "API Recherche d'Entreprises (recherche-entreprises.api.gouv.fr)";
 const MAX_PER_PAGE = 25;
 const DEFAULT_CACHE_TTL_SECONDS = 900;
-const CACHE_PREFIX = "french-open-data:recherche-entreprises:v1:";
+// v2: cached pages no longer hold the birth dates of managers.
+const CACHE_PREFIX = "french-open-data:recherche-entreprises:v2:";
 
-interface RawHeadOffice {
+interface RawEstablishment {
   siret?: string | null;
+  adresse?: string | null;
   code_postal?: string | null;
   libelle_commune?: string | null;
   departement?: string | null;
   region?: string | null;
+  latitude?: string | number | null;
+  longitude?: string | number | null;
+  nom_commercial?: string | null;
+  liste_enseignes?: (string | null)[] | null;
+}
+
+interface RawManager {
+  nom?: string | null;
+  prenoms?: string | null;
+  denomination?: string | null;
+  qualite?: string | null;
+  type_dirigeant?: string | null;
+  annee_de_naissance?: unknown;
+  date_de_naissance?: unknown;
 }
 
 interface RawCompany {
@@ -45,7 +62,9 @@ interface RawCompany {
   tranche_effectif_salarie?: string | null;
   date_creation?: string | null;
   statut_diffusion?: string | null;
-  siege?: RawHeadOffice | null;
+  siege?: RawEstablishment | null;
+  matching_etablissements?: RawEstablishment[] | null;
+  dirigeants?: RawManager[] | null;
 }
 
 interface RawSearchResponse {
@@ -68,9 +87,24 @@ interface MaskedPage {
   maskedCount: number;
 }
 
+function withoutBirthDate(manager: RawManager): RawManager {
+  const kept = { ...manager };
+  delete kept.annee_de_naissance;
+  delete kept.date_de_naissance;
+  return kept;
+}
+
 function maskProtected(data: RawSearchResponse): MaskedPage {
   const all = data.results ?? [];
-  const visible = all.filter((raw) => raw.statut_diffusion !== "P");
+  // Birth dates of managers are personal data no caller needs: dropped here,
+  // before the page is returned or cached.
+  const visible = all
+    .filter((raw) => raw.statut_diffusion !== "P")
+    .map((raw) =>
+      raw.dirigeants
+        ? { ...raw, dirigeants: raw.dirigeants.map(withoutBirthDate) }
+        : raw,
+    );
   return {
     results: visible,
     total: data.total_results ?? null,
@@ -80,8 +114,50 @@ function maskProtected(data: RawSearchResponse): MaskedPage {
   };
 }
 
-function toCompany(raw: RawCompany, fetchedAt: string): Company {
-  const siege = raw.siege ?? {};
+/** "12 RUE X 93100 MONTREUIL" → "12 RUE X": the street line only. */
+function streetOf(etab: RawEstablishment): string | null {
+  const full = etab.adresse?.trim();
+  if (!full) return null;
+  const cut = etab.code_postal ? full.indexOf(` ${etab.code_postal}`) : -1;
+  return (cut > 0 ? full.slice(0, cut) : full).trim() || null;
+}
+
+function coordinate(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toManagers(raw: RawManager[] | null | undefined): CompanyManager[] {
+  const managers: CompanyManager[] = [];
+  for (const m of raw ?? []) {
+    const person = m.type_dirigeant !== "personne morale";
+    const name = (
+      person
+        ? [m.prenoms, m.nom].filter(Boolean).join(" ")
+        : (m.denomination ?? "")
+    ).trim();
+    if (name) {
+      managers.push({
+        name,
+        role: m.qualite ?? null,
+        kind: person ? "person" : "company",
+      });
+    }
+  }
+  return managers;
+}
+
+function toCompany(
+  raw: RawCompany,
+  fetchedAt: string,
+  siret?: string,
+): Company {
+  // A SIRET query describes one establishment: report that one, not the siège.
+  const siege =
+    (siret &&
+      raw.matching_etablissements?.find((etab) => etab.siret === siret)) ||
+    (raw.siege ?? {});
   const provenance: Provenance = {
     source: SOURCE,
     sourceRecordId: raw.siren,
@@ -91,6 +167,14 @@ function toCompany(raw: RawCompany, fetchedAt: string): Company {
     siren: raw.siren,
     siret: siege.siret ?? null,
     name: raw.nom_complet ?? raw.nom_raison_sociale ?? raw.siren,
+    tradeName:
+      siege.nom_commercial?.trim() ||
+      siege.liste_enseignes?.find((sign) => sign?.trim())?.trim() ||
+      null,
+    street: streetOf(siege),
+    latitude: coordinate(siege.latitude),
+    longitude: coordinate(siege.longitude),
+    managers: toManagers(raw.dirigeants),
     naf: raw.activite_principale ?? null,
     nafLabel: raw.libelle_activite_principale ?? null,
     legalForm: raw.nature_juridique ?? null,
@@ -158,9 +242,11 @@ export class RechercheEntreprisesClient {
     const url = buildCompanySearchUrl(params);
     const fetchedAt = new Date().toISOString();
     const page = await this.loadPage(url);
+    const query = params.query?.replace(/\s+/g, "") ?? "";
+    const siret = /^[0-9]{14}$/.test(query) ? query : undefined;
 
     return {
-      records: page.results.map((raw) => toCompany(raw, fetchedAt)),
+      records: page.results.map((raw) => toCompany(raw, fetchedAt, siret)),
       total: page.total ?? page.results.length,
       page: page.page ?? Math.max(params.page ?? 1, 1),
       perPage: page.perPage ?? clampPerPage(params.perPage),

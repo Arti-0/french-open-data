@@ -30,11 +30,34 @@ export interface ResponseCache {
 }
 
 /** A company as projected from the Sirene registry (open-data subset). */
+/**
+ * A registered manager (dirigeant) as published by the open register. Birth
+ * dates are dropped by the client and never returned or cached.
+ */
+export interface CompanyManager {
+  /** "Prénoms NOM" for a person, the registered name for a legal entity. */
+  name: string;
+  /** Role as published, e.g. "Gérant", "Président de SAS". */
+  role: string | null;
+  kind: "person" | "company";
+}
+
 export interface Company {
   siren: string;
-  /** SIRET of the head office (siège), when published. */
+  /**
+   * SIRET of the establishment the other location fields describe: the one
+   * matching a 14-digit SIRET `query`, otherwise the head office (siège).
+   */
   siret: string | null;
   name: string;
+  /** Shop sign or trade name of the establishment, when registered. */
+  tradeName: string | null;
+  /** Street line of the establishment address (no postcode, no city). */
+  street: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  /** Registered managers, in register order; empty when none is published. */
+  managers: CompanyManager[];
   /** Main activity code (NAF/APE), e.g. "62.01Z". */
   naf: string | null;
   nafLabel: string | null;

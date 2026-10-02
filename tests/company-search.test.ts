@@ -107,6 +107,93 @@ describe("RechercheEntreprisesClient.search", () => {
     expect(record.name).toBe("Company 111222333");
     expect(record.siret).toBe("11122233300011");
     expect(record.provenance.sourceRecordId).toBe("111222333");
+    expect(record.street).toBeNull();
+    expect(record.latitude).toBeNull();
+    expect(record.tradeName).toBeNull();
+    expect(record.managers).toEqual([]);
+  });
+
+  test("maps street, coordinates, shop sign and managers; never birth dates", async () => {
+    const stored: string[] = [];
+    const cache: ResponseCache = {
+      get: async () => null,
+      set: async (_key, value) => {
+        stored.push(value);
+      },
+    };
+    mocked = installMockFetch(() =>
+      pageResponse([
+        rawCompany("111222333", {
+          siege: {
+            siret: "11122233300011",
+            adresse: "12 RUE DE LA PAIX 69001 LYON",
+            code_postal: "69001",
+            latitude: "45.767",
+            longitude: "4.834",
+            liste_enseignes: [null, "AU BON PAIN"],
+          },
+          dirigeants: [
+            {
+              nom: "DUPONT",
+              prenoms: "Marie",
+              qualite: "Gérant",
+              type_dirigeant: "personne physique",
+              annee_de_naissance: "1980",
+              date_de_naissance: "1980-05",
+            },
+            {
+              denomination: "HOLDING X",
+              qualite: "Président",
+              type_dirigeant: "personne morale",
+            },
+            { type_dirigeant: "personne physique" },
+          ],
+        }),
+      ]),
+    );
+    const client = new RechercheEntreprisesClient({ cache });
+    const record = (await client.search({ department: "69" })).records[0]!;
+    expect(record.street).toBe("12 RUE DE LA PAIX");
+    expect(record.latitude).toBe(45.767);
+    expect(record.longitude).toBe(4.834);
+    expect(record.tradeName).toBe("AU BON PAIN");
+    expect(record.managers).toEqual([
+      { name: "Marie DUPONT", role: "Gérant", kind: "person" },
+      { name: "HOLDING X", role: "Président", kind: "company" },
+    ]);
+    expect(JSON.stringify(record)).not.toContain("1980");
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).not.toContain("naissance");
+  });
+
+  test("a SIRET query reports the matching establishment, not the head office", async () => {
+    mocked = installMockFetch(() =>
+      pageResponse([
+        rawCompany("111222333", {
+          siege: {
+            siret: "11122233300011",
+            code_postal: "75001",
+            adresse: "1 RUE A 75001 PARIS",
+          },
+          matching_etablissements: [
+            {
+              siret: "11122233300029",
+              code_postal: "93100",
+              libelle_commune: "MONTREUIL",
+              adresse: "5 RUE B 93100 MONTREUIL",
+            },
+          ],
+        }),
+      ]),
+    );
+    const client = new RechercheEntreprisesClient();
+    const shop = (await client.search({ query: "111 222 333 00029" }))
+      .records[0]!;
+    expect(shop.siret).toBe("11122233300029");
+    expect(shop.street).toBe("5 RUE B");
+    expect(shop.city).toBe("MONTREUIL");
+    const head = (await client.search({ query: "company" })).records[0]!;
+    expect(head.siret).toBe("11122233300011");
   });
 
   test("masks diffusion-P records and reports maskedCount", async () => {
@@ -142,7 +229,7 @@ describe("RechercheEntreprisesClient.search", () => {
     const client = new RechercheEntreprisesClient({ cache });
     await client.search({ naf: ["62.01Z"] });
 
-    const key = `french-open-data:recherche-entreprises:v1:${buildCompanySearchUrl({ naf: ["62.01Z"] })}`;
+    const key = `french-open-data:recherche-entreprises:v2:${buildCompanySearchUrl({ naf: ["62.01Z"] })}`;
     const stored = await cache.get(key);
     expect(stored).not.toBeNull();
     expect(stored).not.toContain("222222222");

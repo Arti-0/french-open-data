@@ -48,6 +48,8 @@ console.log(result.total, "matches;", result.maskedCount, "protected records mas
 
 Filters: free-text `query`, `naf` codes, `region`, `department`, `postalCode`, `communeCodes`, `headcountBands`, plus paging. Only active establishments are returned.
 
+Each record also carries what the register publishes about the place and the people: `street`, `latitude`/`longitude`, `tradeName` (shop sign) and `managers` (name, role, person or company). The birth dates of managers are dropped before anything is returned or cached. Location fields describe the head office, except when `query` is a 14-digit SIRET: then they describe that establishment.
+
 ## BODACC legal announcements (keyless)
 
 ```ts

@@ -10,7 +10,7 @@
  * refreshed 60 seconds before their announced expiry, so a token is never
  * used in its final, race-prone minute.
  */
-import { fetchWithTimeout, OpenDataError } from "./http.js";
+import { fetchWithTimeout, OpenDataError, type FetchLike } from "./http.js";
 import type {
   JobOffer,
   JobOfferSearchParams,
@@ -54,12 +54,15 @@ export interface FranceTravailOptions {
   clientSecret: string;
   /** Request timeout in milliseconds (default 10 000). */
   timeoutMs?: number;
+  /** Transport to use instead of `globalThis.fetch` (rate limiter, test double…). */
+  fetch?: FetchLike;
 }
 
 export class FranceTravailClient {
   private readonly clientId: string;
   private readonly clientSecret: string;
   private readonly timeoutMs?: number;
+  private readonly fetch?: FetchLike;
   private token: { value: string; expiresAt: number } | null = null;
 
   constructor(options: FranceTravailOptions) {
@@ -71,6 +74,7 @@ export class FranceTravailClient {
     this.clientId = options.clientId;
     this.clientSecret = options.clientSecret;
     this.timeoutMs = options.timeoutMs;
+    this.fetch = options.fetch;
   }
 
   async searchOffers(
@@ -90,6 +94,7 @@ export class FranceTravailClient {
     const res = await fetchWithTimeout(`${SEARCH_URL}?${qs.toString()}`, {
       headers: { authorization: `Bearer ${token}`, accept: "application/json" },
       timeoutMs: this.timeoutMs,
+      fetch: this.fetch,
     });
 
     // 204 = no matching offers (empty body); 206 = partial content, the
@@ -125,6 +130,7 @@ export class FranceTravailClient {
         scope: SCOPE,
       }),
       timeoutMs: this.timeoutMs,
+      fetch: this.fetch,
     });
     if (!res.ok) {
       throw new OpenDataError(

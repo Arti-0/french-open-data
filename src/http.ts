@@ -7,6 +7,16 @@
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
+ * The shape of `fetch` the library needs. Pass your own (a rate limiter, a
+ * recorder, a test double) through the `fetch` option of any client or
+ * request; `globalThis.fetch` is used when none is given.
+ */
+export type FetchLike = (
+  input: string,
+  init?: RequestInit,
+) => Response | Promise<Response>;
+
+/**
  * The single error type thrown by this library.
  *
  * `status` is set when the upstream API answered with a non-2xx HTTP status;
@@ -28,6 +38,8 @@ export interface RequestOptions {
   body?: URLSearchParams | string;
   /** Hard deadline for the whole request (default 10 000 ms). */
   timeoutMs?: number;
+  /** Transport to use instead of `globalThis.fetch` (see {@link FetchLike}). */
+  fetch?: FetchLike;
 }
 
 /**
@@ -45,7 +57,8 @@ export async function fetchWithTimeout(
     options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   );
   try {
-    return await fetch(url, {
+    const transport: FetchLike = options.fetch ?? ((input, init) => fetch(input, init));
+    return await transport(url, {
       method: options.method ?? "GET",
       headers: options.headers,
       body: options.body,

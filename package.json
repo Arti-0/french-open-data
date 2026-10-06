@@ -1,6 +1,6 @@
 {
   "name": "french-open-data",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Typed, zero-dependency TypeScript clients for French public open-data APIs: company search (API Recherche d'Entreprises / Sirene), BODACC legal announcements, and France Travail job offers.",
   "license": "MIT",
   "type": "module",
@@ -34,7 +34,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "bun test",
-    "validate:catalog": "bun scripts/validate-catalog.ts"
+    "validate:catalog": "bun scripts/validate-catalog.ts",
+    "build:naf-labels": "node scripts/build-naf-labels.mjs",
+    "prepublishOnly": "npm run typecheck && npm run build && npm run test:package"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
@@ -42,5 +44,16 @@
     "eslint": "^9.0.0",
     "typescript": "^5.5.0",
     "typescript-eslint": "^8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Arti-0/french-open-data.git"
+  },
+  "homepage": "https://github.com/Arti-0/french-open-data#readme",
+  "bugs": {
+    "url": "https://github.com/Arti-0/french-open-data/issues"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

@@ -46,9 +46,13 @@ export interface Company {
   siren: string;
   /**
    * SIRET of the establishment the other location fields describe: the one
-   * matching a 14-digit SIRET `query`, otherwise the head office (siège).
+   * matching a 14-digit SIRET `query`; otherwise, when the search is filtered
+   * by place (`postalCode`, `communeCodes` or `department`), the active
+   * establishment that matched that place; otherwise the head office (siège).
    */
   siret: string | null;
+  /** True when the described establishment is the head office. */
+  isHeadOffice: boolean;
   name: string;
   /** Shop sign or trade name of the establishment, when registered. */
   tradeName: string | null;
@@ -60,6 +64,10 @@ export interface Company {
   managers: CompanyManager[];
   /** Main activity code (NAF/APE), e.g. "62.01Z". */
   naf: string | null;
+  /**
+   * French label of `naf`: the API's own label when it sends one, otherwise
+   * the offline INSEE table (see `nafLabel()`); null for an unknown code.
+   */
   nafLabel: string | null;
   /** INSEE legal-category code, e.g. "5710" (SAS). */
   legalForm: string | null;

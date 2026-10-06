@@ -12,7 +12,8 @@
  *   keyed by the request URL (a deterministic serialization of the params).
  *   Cache errors are swallowed: a broken cache falls back to a live request.
  */
-import { fetchJson } from "./http.js";
+import { fetchJson, type FetchLike } from "./http.js";
+import { nafLabel } from "./catalog/naf-labels.js";
 import type {
   Company,
   CompanyManager,
@@ -31,8 +32,11 @@ const CACHE_PREFIX = "french-open-data:recherche-entreprises:v2:";
 
 interface RawEstablishment {
   siret?: string | null;
+  est_siege?: boolean | null;
+  etat_administratif?: string | null;
   adresse?: string | null;
   code_postal?: string | null;
+  commune?: string | null;
   libelle_commune?: string | null;
   departement?: string | null;
   region?: string | null;
@@ -148,16 +152,45 @@ function toManagers(raw: RawManager[] | null | undefined): CompanyManager[] {
   return managers;
 }
 
+/**
+ * Which establishment a record describes. A SIRET query names it. A search
+ * filtered by place reports the active establishment that matched that place:
+ * a company whose head office is elsewhere would otherwise be reported at an
+ * address outside the searched zone (observed with multi-establishment
+ * bakeries, 2026-10-02). Without either, the head office.
+ */
+function pickEstablishment(
+  raw: RawCompany,
+  params: CompanySearchParams,
+  siret?: string,
+): RawEstablishment {
+  const matching = raw.matching_etablissements ?? [];
+  const siege = raw.siege ?? {};
+  if (siret) return matching.find((etab) => etab.siret === siret) ?? siege;
+  const inPlace = (etab: RawEstablishment): boolean =>
+    (!!params.postalCode && etab.code_postal === params.postalCode) ||
+    (!!params.communeCodes?.length &&
+      !!etab.commune &&
+      params.communeCodes.includes(etab.commune)) ||
+    (!!params.department && etab.departement === params.department);
+  if (!params.postalCode && !params.communeCodes?.length && !params.department) {
+    return siege;
+  }
+  if (inPlace(siege)) return siege;
+  return (
+    matching.find(
+      (etab) => inPlace(etab) && (etab.etat_administratif ?? "A") === "A",
+    ) ?? siege
+  );
+}
+
 function toCompany(
   raw: RawCompany,
   fetchedAt: string,
+  params: CompanySearchParams,
   siret?: string,
 ): Company {
-  // A SIRET query describes one establishment: report that one, not the siège.
-  const siege =
-    (siret &&
-      raw.matching_etablissements?.find((etab) => etab.siret === siret)) ||
-    (raw.siege ?? {});
+  const siege = pickEstablishment(raw, params, siret);
   const provenance: Provenance = {
     source: SOURCE,
     sourceRecordId: raw.siren,
@@ -166,6 +199,8 @@ function toCompany(
   return {
     siren: raw.siren,
     siret: siege.siret ?? null,
+    isHeadOffice:
+      siege.est_siege ?? (!!siege.siret && siege.siret === raw.siege?.siret),
     name: raw.nom_complet ?? raw.nom_raison_sociale ?? raw.siren,
     tradeName:
       siege.nom_commercial?.trim() ||
@@ -176,7 +211,8 @@ function toCompany(
     longitude: coordinate(siege.longitude),
     managers: toManagers(raw.dirigeants),
     naf: raw.activite_principale ?? null,
-    nafLabel: raw.libelle_activite_principale ?? null,
+    nafLabel:
+      raw.libelle_activite_principale ?? nafLabel(raw.activite_principale),
     legalForm: raw.nature_juridique ?? null,
     postalCode: siege.code_postal ?? null,
     city: siege.libelle_commune ?? null,
@@ -225,17 +261,24 @@ export interface RechercheEntreprisesOptions {
   cacheTtlSeconds?: number;
   /** Request timeout in milliseconds (default 10 000). */
   timeoutMs?: number;
+  /**
+   * Transport to use instead of `globalThis.fetch`: a rate limiter, a call
+   * counter, a test double. Every search and cache miss goes through it.
+   */
+  fetch?: FetchLike;
 }
 
 export class RechercheEntreprisesClient {
   private readonly cache?: ResponseCache;
   private readonly cacheTtlSeconds: number;
   private readonly timeoutMs?: number;
+  private readonly fetch?: FetchLike;
 
   constructor(options: RechercheEntreprisesOptions = {}) {
     this.cache = options.cache;
     this.cacheTtlSeconds = options.cacheTtlSeconds ?? DEFAULT_CACHE_TTL_SECONDS;
     this.timeoutMs = options.timeoutMs;
+    this.fetch = options.fetch;
   }
 
   async search(params: CompanySearchParams): Promise<CompanySearchResult> {
@@ -246,7 +289,9 @@ export class RechercheEntreprisesClient {
     const siret = /^[0-9]{14}$/.test(query) ? query : undefined;
 
     return {
-      records: page.results.map((raw) => toCompany(raw, fetchedAt, siret)),
+      records: page.results.map((raw) =>
+        toCompany(raw, fetchedAt, params, siret),
+      ),
       total: page.total ?? page.results.length,
       page: page.page ?? Math.max(params.page ?? 1, 1),
       perPage: page.perPage ?? clampPerPage(params.perPage),
@@ -271,6 +316,7 @@ export class RechercheEntreprisesClient {
     }
     const data = await fetchJson<RawSearchResponse>(url, {
       timeoutMs: this.timeoutMs,
+      fetch: this.fetch,
     });
     const masked = maskProtected(data);
     if (this.cache) {

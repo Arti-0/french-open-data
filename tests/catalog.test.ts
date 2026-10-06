@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { NAF_SECTORS, nafSectorBySlug } from "../src/catalog/naf";
+import { NAF_LABELS, nafLabel } from "../src/catalog/naf-labels";
 import {
   arrondissementCodes,
   COMMUNES,
@@ -8,6 +9,26 @@ import {
 
 // Structural checks only — live validation against the API is
 // scripts/validate-catalog.ts, which is deliberately NOT part of CI.
+
+describe("NAF labels", () => {
+  test("covers the whole NAF rév. 2 sub-class level and every curated sector code", () => {
+    expect(NAF_LABELS.size).toBeGreaterThanOrEqual(700);
+    for (const code of NAF_LABELS.keys()) {
+      expect(code).toMatch(/^\d{2}\.\d{2}[A-Z]$/);
+    }
+    for (const sector of NAF_SECTORS) {
+      for (const code of sector.nafCodes) expect(nafLabel(code)).not.toBeNull();
+    }
+  });
+
+  test("nafLabel normalises case and spacing, and is null for unknown or empty codes", () => {
+    expect(nafLabel("10.71C")).toBe("Boulangerie et boulangerie-pâtisserie");
+    expect(nafLabel(" 10.71c ")).toBe("Boulangerie et boulangerie-pâtisserie");
+    expect(nafLabel("99.99X")).toBeNull();
+    expect(nafLabel(null)).toBeNull();
+    expect(nafLabel("")).toBeNull();
+  });
+});
 
 describe("NAF catalog", () => {
   test("slugs are unique and indexed", () => {

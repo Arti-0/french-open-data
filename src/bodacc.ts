@@ -7,7 +7,7 @@
  * Open data, no credentials. Announcements concern legal entities (a public
  * register), not private individuals.
  */
-import { fetchJson } from "./http.js";
+import { fetchJson, type FetchLike } from "./http.js";
 import type {
   BodaccAnnouncement,
   BodaccSearchParams,
@@ -55,13 +55,17 @@ function toAnnouncement(raw: RawRecord, fetchedAt: string): BodaccAnnouncement {
 export interface BodaccOptions {
   /** Request timeout in milliseconds (default 10 000). */
   timeoutMs?: number;
+  /** Transport to use instead of `globalThis.fetch` (rate limiter, test double…). */
+  fetch?: FetchLike;
 }
 
 export class BodaccClient {
   private readonly timeoutMs?: number;
+  private readonly fetch?: FetchLike;
 
   constructor(options: BodaccOptions = {}) {
     this.timeoutMs = options.timeoutMs;
+    this.fetch = options.fetch;
   }
 
   /** Latest announcements for a SIREN, most recent first. */
@@ -75,6 +79,7 @@ export class BodaccClient {
     const fetchedAt = new Date().toISOString();
     const data = await fetchJson<RawResponse>(`${ENDPOINT}?${qs.toString()}`, {
       timeoutMs: this.timeoutMs,
+      fetch: this.fetch,
     });
     return {
       siren: params.siren,

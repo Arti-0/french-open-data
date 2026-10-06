@@ -22,10 +22,10 @@ Plus a small bounded-timeout fetch core and a curated, **empirically validated**
 bun add french-open-data   # or npm / pnpm / yarn
 ```
 
-The npm package is pending its first publication. Until then, install a packed
-release artifact from this repository. Published releases contain compiled ESM
-JavaScript and TypeScript declarations; Node 18+ can import them without a
-TypeScript loader.
+Published releases contain compiled ESM JavaScript and TypeScript declarations;
+Node 18+ can import them without a TypeScript loader. Until the package is on
+the npm registry, a packed release artifact from this repository installs the
+same way (`npm pack`, then `npm install ./french-open-data-<version>.tgz`).
 
 ## Company search (keyless)
 
@@ -48,7 +48,11 @@ console.log(result.total, "matches;", result.maskedCount, "protected records mas
 
 Filters: free-text `query`, `naf` codes, `region`, `department`, `postalCode`, `communeCodes`, `headcountBands`, plus paging. Only active establishments are returned.
 
-Each record also carries what the register publishes about the place and the people: `street`, `latitude`/`longitude`, `tradeName` (shop sign) and `managers` (name, role, person or company). The birth dates of managers are dropped before anything is returned or cached. Location fields describe the head office, except when `query` is a 14-digit SIRET: then they describe that establishment.
+Each record also carries what the register publishes about the place and the people: `street`, `latitude`/`longitude`, `tradeName` (shop sign) and `managers` (name, role, person or company). The birth dates of managers are dropped before anything is returned or cached.
+
+**Which establishment a record describes** (`siret`, `isHeadOffice` and the location fields): when `query` is a 14-digit SIRET, that establishment; when the search is filtered by place (`postalCode`, `communeCodes` or `department`), the active establishment that matched the place, so a chain whose head office sits elsewhere is reported at its shop in the searched zone; otherwise the head office.
+
+`nafLabel` is the API's label when it sends one, otherwise the offline INSEE table of all 732 NAF rév. 2 sub-classes (`nafLabel("10.71C")` → `"Boulangerie et boulangerie-pâtisserie"`, also exported as `NAF_LABELS`; regenerate with `npm run build:naf-labels`).
 
 ## BODACC legal announcements (keyless)
 
@@ -77,6 +81,7 @@ const { offers } = await jobs.searchOffers({ keywords: "plombier", department: "
 
 ## Design notes
 
+- **Your transport, if you want one.** Every client takes `fetch` in its options (`new RechercheEntreprisesClient({ fetch: myLimitedFetch })`): a rate limiter, a call counter, a recorder or a test double. Every request, including cache misses and token refreshes, goes through it; `globalThis.fetch` is used when none is given. Masking and the deadline apply either way.
 - **Bounded timeouts, typed errors.** Every request runs under an `AbortController` deadline (default 10 s). All failures — timeout, network, non-2xx — throw a single `OpenDataError`; `error.status` carries the HTTP status when there is one.
 - **Fail-open cache.** Company-search responses can be cached through a two-method `ResponseCache` interface (`get`/`set` with TTL) keyed by the deterministic request URL. A bundled `MemoryCache` is the default choice; plug in Redis or anything else. If the cache throws, the client silently falls back to a live request — a broken cache never breaks a lookup.
 - **Token cache with safety margin.** France Travail access tokens (~25 min) are cached per client instance and refreshed 60 seconds *before* their announced expiry, so a token is never used in its race-prone final minute. `204` (no results) and `206` (partial ranged content) are handled as the normal responses they are, not errors.

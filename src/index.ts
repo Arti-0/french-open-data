@@ -1,5 +1,5 @@
 export { OpenDataError, fetchJson, fetchWithTimeout } from "./http.js";
-export type { RequestOptions } from "./http.js";
+export type { FetchLike, RequestOptions } from "./http.js";
 
 export type {
   BodaccAnnouncement,
@@ -32,6 +32,7 @@ export type { FranceTravailOptions } from "./france-travail.js";
 
 export { NAF_SECTORS, nafSectorBySlug } from "./catalog/naf.js";
 export type { NafSector } from "./catalog/naf.js";
+export { NAF_LABELS, nafLabel } from "./catalog/naf-labels.js";
 
 export {
   COMMUNES,

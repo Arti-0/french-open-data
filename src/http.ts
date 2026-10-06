@@ -14,7 +14,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 export type FetchLike = (
   input: string,
   init?: RequestInit,
-) => Promise<Response>;
+) => Response | Promise<Response>;
 
 /**
  * The single error type thrown by this library.

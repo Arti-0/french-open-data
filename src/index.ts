@@ -6,20 +6,28 @@ export type {
   BodaccSearchParams,
   BodaccSearchResult,
   Company,
+  CompanyEstablishments,
+  CompanyFinances,
   CompanyManager,
+  CompanyNearbyParams,
+  CompanyNearbyResult,
   CompanySearchParams,
   CompanySearchResult,
   JobOffer,
   JobOfferSearchParams,
   JobOfferSearchResult,
+  NearbyCompany,
   Provenance,
   ResponseCache,
+  StorageLike,
 } from "./types.js";
 
-export { MemoryCache } from "./cache.js";
+export { MemoryCache, StorageCache } from "./cache.js";
+export type { StorageCacheOptions } from "./cache.js";
 
 export {
   RechercheEntreprisesClient,
+  buildCompanyNearbyUrl,
   buildCompanySearchUrl,
 } from "./company-search.js";
 export type { RechercheEntreprisesOptions } from "./company-search.js";

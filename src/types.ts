@@ -29,6 +29,17 @@ export interface ResponseCache {
   set(key: string, value: string, ttlSeconds: number): Promise<void>;
 }
 
+/**
+ * The subset of the Web Storage API that {@link StorageCache} needs:
+ * `localStorage`, `sessionStorage`, or any object with the same three
+ * synchronous methods (a test double, a file-backed map…).
+ */
+export interface StorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
 /** A company as projected from the Sirene registry (open-data subset). */
 /**
  * A registered manager (dirigeant) as published by the open register. Birth
@@ -79,6 +90,13 @@ export interface Company {
   headcountRange: string | null;
   createdDate: string | null;
   /**
+   * How many establishments the legal unit has, and how many are open: a
+   * single shop reads 1/1, a chain 40/38. Null when the register says nothing.
+   */
+  establishments: CompanyEstablishments;
+  /** Latest published yearly accounts, or null when the company files none. */
+  finances: CompanyFinances | null;
+  /**
    * Raw Sirene diffusion status, passed through untouched so consumers can
    * re-apply their own deny-by-default checks. Records with status "P"
    * (diffusion partielle — protected) never appear in results at all.
@@ -87,9 +105,31 @@ export interface Company {
   provenance: Provenance;
 }
 
+export interface CompanyEstablishments {
+  total: number | null;
+  open: number | null;
+}
+
+/** One year of published accounts (source: the register's `finances`). */
+export interface CompanyFinances {
+  /** Accounting year, "2023". */
+  year: string;
+  /** Chiffre d'affaires, in euros. */
+  revenue: number | null;
+  /** Résultat net, in euros (negative for a loss). */
+  netIncome: number | null;
+}
+
 export interface CompanySearchParams {
-  /** Free-text query (name, activity, address…). */
+  /**
+   * Free-text query: company name, address words, a manager's name, or a
+   * SIREN/SIRET for a direct lookup.
+   */
   query?: string;
+  /** Surname of a registered manager or elected official (nom_personne). */
+  managerName?: string;
+  /** First name(s) of that person (prenoms_personne). */
+  managerFirstName?: string;
   /** NAF/APE codes, OR-combined (e.g. ["62.01Z", "62.02A"]). */
   naf?: string[];
   /** INSEE region code, e.g. "84" (Auvergne-Rhône-Alpes). */
@@ -115,11 +155,37 @@ export interface CompanySearchResult {
   total: number;
   page: number;
   perPage: number;
+  /** Number of pages for this query, as the API counts them. */
+  totalPages: number;
   /**
    * Number of protected records (diffusion status "P") removed from this
    * page. Always reported so callers can tell filtering happened.
    */
   maskedCount: number;
+}
+
+/** Parameters of a geographic search (`GET /near_point`). */
+export interface CompanyNearbyParams {
+  latitude: number;
+  longitude: number;
+  /** Search radius in kilometres: 1 by default, 50 at most (API limit). */
+  radiusKm?: number;
+  /** NAF/APE codes, OR-combined. */
+  naf?: string[];
+  page?: number;
+  /** Results per page, capped at the API maximum of 25. */
+  perPage?: number;
+}
+
+/** A company found around a point: its closest establishment, with the distance. */
+export interface NearbyCompany extends Company {
+  /** Distance from the searched point to the reported establishment, in metres; null when it has no coordinates. */
+  distanceMetres: number | null;
+}
+
+export interface CompanyNearbyResult extends Omit<CompanySearchResult, "records"> {
+  /** Nearest first; companies without coordinates last. */
+  records: NearbyCompany[];
 }
 
 /** One BODACC announcement (public legal register — companies, not persons). */

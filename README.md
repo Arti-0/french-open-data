@@ -23,9 +23,7 @@ bun add french-open-data   # or npm / pnpm / yarn
 ```
 
 Published releases contain compiled ESM JavaScript and TypeScript declarations;
-Node 18+ can import them without a TypeScript loader. Until the package is on
-the npm registry, a packed release artifact from this repository installs the
-same way (`npm pack`, then `npm install ./french-open-data-<version>.tgz`).
+Node 18+ can import them without a TypeScript loader.
 
 ## Company search (keyless)
 
@@ -46,9 +44,26 @@ for (const company of result.records) {
 console.log(result.total, "matches;", result.maskedCount, "protected records masked");
 ```
 
-Filters: free-text `query`, `naf` codes, `region`, `department`, `postalCode`, `communeCodes`, `headcountBands`, plus paging. Only active establishments are returned.
+Filters: free-text `query`, `naf` codes, `region`, `department`, `postalCode`, `communeCodes`, `headcountBands`, `managerName`/`managerFirstName`, plus paging (`page`, `perPage`; the result reports `total` and `totalPages`). Only active establishments are returned.
 
-Each record also carries what the register publishes about the place and the people: `street`, `latitude`/`longitude`, `tradeName` (shop sign) and `managers` (name, role, person or company). The birth dates of managers are dropped before anything is returned or cached.
+**Finding one company from what a caller tells you.** `query` is the API's free-text search: it matches the company name, the words of its address and the names of its registered managers, and a 9- or 14-digit value is a direct SIREN/SIRET lookup. So `search({ query: "fournil montreuil" })`, `search({ query: "ngom", department: "93", naf: ["10.71C"] })` and `search({ query: "92062241200011" })` all work. `managerName` and `managerFirstName` filter on the person alone when the caller gives only a name.
+
+Each record also carries what the register publishes about the place and the people: `street`, `latitude`/`longitude`, `tradeName` (shop sign) and `managers` (name, role, person or company). The birth dates of managers are dropped before anything is returned or cached. Two signals tell a shop from a chain and a going concern from a shell: `establishments` (`{ total, open }`, e.g. 1/1 for a single shop) and `finances` (the latest published year: `revenue`, `netIncome`, or `null` when the company files none).
+
+## Companies around a point (keyless)
+
+```ts
+const nearby = await client.searchNearby({
+  latitude: 48.8634, longitude: 2.4434,   // a client's shop
+  radiusKm: 0.5,                           // 1 by default, 50 at most
+  naf: ["10.71C"],
+});
+for (const shop of nearby.records) {
+  console.log(shop.distanceMetres, "m", shop.name, shop.street);
+}
+```
+
+`GET /near_point` behind the same client, cache and masking. Each company is reported at its closest open establishment to the point, with `distanceMetres`; records come nearest first, those without coordinates last. Use it for "who else is around this address" and for zones that are not a postcode.
 
 **Which establishment a record describes** (`siret`, `isHeadOffice` and the location fields): when `query` is a 14-digit SIRET, that establishment; when the search is filtered by place (`postalCode`, `communeCodes` or `department`), the active establishment that matched the place, so a chain whose head office sits elsewhere is reported at its shop in the searched zone; otherwise the head office.
 
@@ -83,7 +98,14 @@ const { offers } = await jobs.searchOffers({ keywords: "plombier", department: "
 
 - **Your transport, if you want one.** Every client takes `fetch` in its options (`new RechercheEntreprisesClient({ fetch: myLimitedFetch })`): a rate limiter, a call counter, a recorder or a test double. Every request, including cache misses and token refreshes, goes through it; `globalThis.fetch` is used when none is given. Masking and the deadline apply either way.
 - **Bounded timeouts, typed errors.** Every request runs under an `AbortController` deadline (default 10 s). All failures — timeout, network, non-2xx — throw a single `OpenDataError`; `error.status` carries the HTTP status when there is one.
-- **Fail-open cache.** Company-search responses can be cached through a two-method `ResponseCache` interface (`get`/`set` with TTL) keyed by the deterministic request URL. A bundled `MemoryCache` is the default choice; plug in Redis or anything else. If the cache throws, the client silently falls back to a live request — a broken cache never breaks a lookup.
+- **Fail-open cache.** Company-search responses (text and geographic) can be cached through a two-method `ResponseCache` interface (`get`/`set` with TTL) keyed by the deterministic request URL. Two implementations are bundled: `MemoryCache` (one process) and `StorageCache` (any Web Storage–like object with `getItem`/`setItem`/`removeItem`: `localStorage`, `sessionStorage`, a test double), whose entries survive page loads, so a search someone leaves and comes back to is served instantly, without a request. Plug in Redis or anything else the same way. If the cache throws — a full `localStorage` included — the client silently falls back to a live request — a broken cache never breaks a lookup.
+
+  ```ts
+  const client = new RechercheEntreprisesClient({
+    cache: new StorageCache(localStorage),
+    cacheTtlSeconds: 24 * 3600,   // register data moves slowly
+  });
+  ```
 - **Token cache with safety margin.** France Travail access tokens (~25 min) are cached per client instance and refreshed 60 seconds *before* their announced expiry, so a token is never used in its race-prone final minute. `204` (no results) and `206` (partial ranged content) are handled as the normal responses they are, not errors.
 - **Diffusion-P privacy masking, deny-by-default.** Sirene lets individuals restrict publication of their data (statut de diffusion "P" — *diffusion partielle*). This client removes those records **before** returning or caching anything and reports the removals via `maskedCount`. Deny-by-default because the safe failure mode is to show less: a bug in permissive filtering leaks protected personal data; a bug in restrictive filtering hides a row. The raw `diffusionStatus` is passed through on visible records so downstream code can re-apply its own checks.
 

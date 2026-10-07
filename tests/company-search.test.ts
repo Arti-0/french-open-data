@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  buildCompanyNearbyUrl,
   buildCompanySearchUrl,
   RechercheEntreprisesClient,
 } from "../src/company-search";
@@ -37,6 +38,8 @@ describe("buildCompanySearchUrl", () => {
     const url = new URL(
       buildCompanySearchUrl({
         query: "boulangerie dupont",
+        managerName: "DUPONT",
+        managerFirstName: "Marie",
         naf: ["10.71C", "10.71D"],
         region: "84",
         department: "69",
@@ -52,6 +55,8 @@ describe("buildCompanySearchUrl", () => {
     );
     const qs = url.searchParams;
     expect(qs.get("q")).toBe("boulangerie dupont");
+    expect(qs.get("nom_personne")).toBe("DUPONT");
+    expect(qs.get("prenoms_personne")).toBe("Marie");
     expect(qs.get("activite_principale")).toBe("10.71C,10.71D");
     expect(qs.get("region")).toBe("84");
     expect(qs.get("departement")).toBe("69");
@@ -70,6 +75,8 @@ describe("buildCompanySearchUrl", () => {
     expect(qs.get("per_page")).toBe("25");
     for (const absent of [
       "q",
+      "nom_personne",
+      "prenoms_personne",
       "activite_principale",
       "region",
       "departement",
@@ -323,7 +330,7 @@ describe("RechercheEntreprisesClient.search", () => {
     const client = new RechercheEntreprisesClient({ cache });
     await client.search({ naf: ["62.01Z"] });
 
-    const key = `french-open-data:recherche-entreprises:v2:${buildCompanySearchUrl({ naf: ["62.01Z"] })}`;
+    const key = `french-open-data:recherche-entreprises:v3:${buildCompanySearchUrl({ naf: ["62.01Z"] })}`;
     const stored = await cache.get(key);
     expect(stored).not.toBeNull();
     expect(stored).not.toContain("222222222");
@@ -371,5 +378,104 @@ describe("RechercheEntreprisesClient.search", () => {
 
     const result = await client.search({});
     expect(result.records).toHaveLength(1);
+  });
+
+  test("maps the establishment counts and the latest published accounts", async () => {
+    mocked = installMockFetch(() =>
+      pageResponse([
+        rawCompany("111222333", {
+          nombre_etablissements: 40,
+          nombre_etablissements_ouverts: 38,
+          finances: {
+            "2021": { ca: 100, resultat_net: 1 },
+            "2023": { ca: 250000, resultat_net: -33999 },
+            "2022": { ca: 200, resultat_net: 2 },
+          },
+        }),
+        rawCompany("444555666", { finances: {} }),
+        rawCompany("777888999"),
+      ]),
+    );
+    const { records } = await new RechercheEntreprisesClient().search({ query: "x" });
+    expect(records[0]!.establishments).toEqual({ total: 40, open: 38 });
+    expect(records[0]!.finances).toEqual({ year: "2023", revenue: 250000, netIncome: -33999 });
+    expect(records[1]!.establishments).toEqual({ total: null, open: null });
+    expect(records[1]!.finances).toBeNull();
+    expect(records[2]!.finances).toBeNull();
+  });
+
+  test("reports the page count: the API's when it sends one, otherwise computed", async () => {
+    mocked = installMockFetch((url) =>
+      url.includes("page=2")
+        ? jsonResponse({ results: [rawCompany("111222333")], total_results: 60, page: 2, per_page: 25 })
+        : jsonResponse({ results: [rawCompany("111222333")], total_results: 60, total_pages: 3, page: 1, per_page: 25 }),
+    );
+    const client = new RechercheEntreprisesClient();
+    expect((await client.search({ query: "x" })).totalPages).toBe(3);
+    expect((await client.search({ query: "x", page: 2 })).totalPages).toBe(3);
+  });
+});
+
+describe("buildCompanyNearbyUrl", () => {
+  test("serializes the point, the radius in km and the filters", () => {
+    const url = new URL(
+      buildCompanyNearbyUrl({ latitude: 48.8634, longitude: 2.4434, radiusKm: 0.5, naf: ["10.71C"], page: 2, perPage: 10 }),
+    );
+    expect(url.origin + url.pathname).toBe("https://recherche-entreprises.api.gouv.fr/near_point");
+    const qs = url.searchParams;
+    expect(qs.get("lat")).toBe("48.8634");
+    expect(qs.get("long")).toBe("2.4434");
+    expect(qs.get("radius")).toBe("0.5");
+    expect(qs.get("activite_principale")).toBe("10.71C");
+    expect(qs.get("page")).toBe("2");
+    expect(qs.get("per_page")).toBe("10");
+  });
+
+  test("defaults the radius to 1 km, caps it at the API's 50 km, clamps perPage", () => {
+    const base = { latitude: 45.76, longitude: 4.83 };
+    expect(new URL(buildCompanyNearbyUrl(base)).searchParams.get("radius")).toBe("1");
+    expect(new URL(buildCompanyNearbyUrl({ ...base, radiusKm: 120 })).searchParams.get("radius")).toBe("50");
+    expect(new URL(buildCompanyNearbyUrl({ ...base, perPage: 500 })).searchParams.get("per_page")).toBe("25");
+    expect(new URL(buildCompanyNearbyUrl(base)).searchParams.get("activite_principale")).toBeNull();
+  });
+});
+
+describe("RechercheEntreprisesClient.searchNearby", () => {
+  const nearbyPage = () =>
+    pageResponse([
+      // Head office far away, one closed shop near, one open shop near: the open near one is reported.
+      rawCompany("111222333", {
+        siege: { siret: "11122233300011", est_siege: true, code_postal: "75008", latitude: "48.8738", longitude: "2.2950" },
+        matching_etablissements: [
+          { siret: "11122233300029", etat_administratif: "F", code_postal: "93100", latitude: "48.8634", longitude: "2.4434" },
+          { siret: "11122233300037", etat_administratif: "A", code_postal: "93100", libelle_commune: "MONTREUIL", adresse: "2 BD PAUL VAILLANT COUTURIER 93100 MONTREUIL", latitude: "48.8629", longitude: "2.4428" },
+        ],
+      }),
+      // No coordinates anywhere: distance unknown, listed last.
+      rawCompany("444555666", { siege: { siret: "44455566600011" } }),
+      // Closer than the first one.
+      rawCompany("777888999", { siege: { siret: "77788899900011", est_siege: true, latitude: "48.8635", longitude: "2.4435" } }),
+      rawCompany("000000000", { statut_diffusion: "P", siege: { siret: "00000000000011", latitude: "48.8634", longitude: "2.4434" } }),
+    ]);
+
+  test("reports each company at its closest open establishment, nearest first, protected records masked", async () => {
+    mocked = installMockFetch(nearbyPage);
+    const client = new RechercheEntreprisesClient({ cache: new MemoryCache() });
+    const result = await client.searchNearby({ latitude: 48.8634, longitude: 2.4434, radiusKm: 0.5, naf: ["10.71C"] });
+    expect(queryOf(mocked.calls[0]!).get("radius")).toBe("0.5");
+    expect(result.records.map((r) => r.siren)).toEqual(["777888999", "111222333", "444555666"]);
+    expect(result.maskedCount).toBe(1);
+    expect(result.totalPages).toBe(1);
+    const shop = result.records[1]!;
+    expect(shop.siret).toBe("11122233300037");
+    expect(shop.isHeadOffice).toBe(false);
+    expect(shop.street).toBe("2 BD PAUL VAILLANT COUTURIER");
+    expect(shop.distanceMetres).toBeGreaterThan(50);
+    expect(shop.distanceMetres).toBeLessThan(100);
+    expect(result.records[0]!.distanceMetres).toBeLessThan(20);
+    expect(result.records[2]!.distanceMetres).toBeNull();
+    // Same URL, same cache: the second call makes no request.
+    await client.searchNearby({ latitude: 48.8634, longitude: 2.4434, radiusKm: 0.5, naf: ["10.71C"] });
+    expect(mocked.calls).toHaveLength(1);
   });
 });

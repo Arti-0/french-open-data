@@ -1,6 +1,6 @@
 {
   "name": "french-open-data",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Typed, zero-dependency TypeScript clients for French public open-data APIs: company search (API Recherche d'Entreprises / Sirene), BODACC legal announcements, and France Travail job offers.",
   "license": "MIT",
   "type": "module",

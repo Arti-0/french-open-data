@@ -11,24 +11,34 @@
  * - Responses are optionally cached through a pluggable {@link ResponseCache}
  *   keyed by the request URL (a deterministic serialization of the params).
  *   Cache errors are swallowed: a broken cache falls back to a live request.
+ * - Two entry points share all of the above: `search()` (text and filters,
+ *   `GET /search`) and `searchNearby()` (around a point, `GET /near_point`).
  */
 import { fetchJson, type FetchLike } from "./http.js";
 import { nafLabel } from "./catalog/naf-labels.js";
 import type {
   Company,
+  CompanyFinances,
   CompanyManager,
+  CompanyNearbyParams,
+  CompanyNearbyResult,
   CompanySearchParams,
   CompanySearchResult,
+  NearbyCompany,
   Provenance,
   ResponseCache,
 } from "./types.js";
 
 const SEARCH_ENDPOINT = "https://recherche-entreprises.api.gouv.fr/search";
+const NEARBY_ENDPOINT = "https://recherche-entreprises.api.gouv.fr/near_point";
 const SOURCE = "API Recherche d'Entreprises (recherche-entreprises.api.gouv.fr)";
 const MAX_PER_PAGE = 25;
+/** The API refuses a radius above 50 km. */
+const MAX_RADIUS_KM = 50;
+const DEFAULT_RADIUS_KM = 1;
 const DEFAULT_CACHE_TTL_SECONDS = 900;
-// v2: cached pages no longer hold the birth dates of managers.
-const CACHE_PREFIX = "french-open-data:recherche-entreprises:v2:";
+// v3: cached pages carry the page count; v2 dropped the birth dates of managers.
+const CACHE_PREFIX = "french-open-data:recherche-entreprises:v3:";
 
 interface RawEstablishment {
   siret?: string | null;
@@ -56,6 +66,12 @@ interface RawManager {
   date_de_naissance?: unknown;
 }
 
+/** Yearly accounts as published: `{ "2023": { ca, resultat_net } }`. */
+type RawFinances = Record<
+  string,
+  { ca?: number | null; resultat_net?: number | null } | null
+>;
+
 interface RawCompany {
   siren: string;
   nom_complet?: string | null;
@@ -66,6 +82,9 @@ interface RawCompany {
   tranche_effectif_salarie?: string | null;
   date_creation?: string | null;
   statut_diffusion?: string | null;
+  nombre_etablissements?: number | null;
+  nombre_etablissements_ouverts?: number | null;
+  finances?: RawFinances | null;
   siege?: RawEstablishment | null;
   matching_etablissements?: RawEstablishment[] | null;
   dirigeants?: RawManager[] | null;
@@ -74,6 +93,7 @@ interface RawCompany {
 interface RawSearchResponse {
   results?: RawCompany[];
   total_results?: number;
+  total_pages?: number;
   page?: number;
   per_page?: number;
 }
@@ -86,6 +106,7 @@ interface RawSearchResponse {
 interface MaskedPage {
   results: RawCompany[];
   total: number | null;
+  totalPages: number | null;
   page: number | null;
   perPage: number | null;
   maskedCount: number;
@@ -112,6 +133,7 @@ function maskProtected(data: RawSearchResponse): MaskedPage {
   return {
     results: visible,
     total: data.total_results ?? null,
+    totalPages: data.total_pages ?? null,
     page: data.page ?? null,
     perPage: data.per_page ?? null,
     maskedCount: all.length - visible.length,
@@ -130,6 +152,10 @@ function coordinate(value: string | number | null | undefined): number | null {
   if (value === null || value === undefined || value === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function count(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function toManagers(raw: RawManager[] | null | undefined): CompanyManager[] {
@@ -152,21 +178,78 @@ function toManagers(raw: RawManager[] | null | undefined): CompanyManager[] {
   return managers;
 }
 
+/** The most recent published year of accounts, or null when none is. */
+function toFinances(raw: RawFinances | null | undefined): CompanyFinances | null {
+  const years = Object.keys(raw ?? {})
+    .filter((year) => /^\d{4}$/.test(year) && raw?.[year])
+    .sort();
+  const year = years[years.length - 1];
+  if (!year) return null;
+  const accounts = raw![year]!;
+  return {
+    year,
+    revenue: count(accounts.ca),
+    netIncome: count(accounts.resultat_net),
+  };
+}
+
+interface Point {
+  latitude: number;
+  longitude: number;
+}
+
+/** Great-circle distance in metres (haversine), rounded. */
+function metresBetween(a: Point, b: Point): number {
+  const rad = Math.PI / 180;
+  const dLat = (b.latitude - a.latitude) * rad;
+  const dLng = (b.longitude - a.longitude) * rad;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.latitude * rad) *
+      Math.cos(b.latitude * rad) *
+      Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * 6_371_000 * Math.asin(Math.sqrt(h)));
+}
+
+function pointOf(etab: RawEstablishment): Point | null {
+  const latitude = coordinate(etab.latitude);
+  const longitude = coordinate(etab.longitude);
+  return latitude === null || longitude === null ? null : { latitude, longitude };
+}
+
 /**
  * Which establishment a record describes. A SIRET query names it. A search
  * filtered by place reports the active establishment that matched that place:
  * a company whose head office is elsewhere would otherwise be reported at an
  * address outside the searched zone (observed with multi-establishment
- * bakeries, 2026-10-02). Without either, the head office.
+ * bakeries, 2026-10-02). A search around a point reports the closest active
+ * establishment to that point. Without any of these, the head office.
  */
 function pickEstablishment(
   raw: RawCompany,
   params: CompanySearchParams,
   siret?: string,
+  near?: Point,
 ): RawEstablishment {
   const matching = raw.matching_etablissements ?? [];
   const siege = raw.siege ?? {};
   if (siret) return matching.find((etab) => etab.siret === siret) ?? siege;
+  const active = (etab: RawEstablishment): boolean =>
+    (etab.etat_administratif ?? "A") === "A";
+  if (near) {
+    let best: RawEstablishment | undefined;
+    let bestDistance = Infinity;
+    for (const etab of [siege, ...matching]) {
+      const point = pointOf(etab);
+      if (!point || !active(etab)) continue;
+      const distance = metresBetween(near, point);
+      if (distance < bestDistance) {
+        best = etab;
+        bestDistance = distance;
+      }
+    }
+    return best ?? matching.find(active) ?? siege;
+  }
   const inPlace = (etab: RawEstablishment): boolean =>
     (!!params.postalCode && etab.code_postal === params.postalCode) ||
     (!!params.communeCodes?.length &&
@@ -177,11 +260,7 @@ function pickEstablishment(
     return siege;
   }
   if (inPlace(siege)) return siege;
-  return (
-    matching.find(
-      (etab) => inPlace(etab) && (etab.etat_administratif ?? "A") === "A",
-    ) ?? siege
-  );
+  return matching.find((etab) => inPlace(etab) && active(etab)) ?? siege;
 }
 
 function toCompany(
@@ -189,8 +268,9 @@ function toCompany(
   fetchedAt: string,
   params: CompanySearchParams,
   siret?: string,
+  near?: Point,
 ): Company {
-  const siege = pickEstablishment(raw, params, siret);
+  const siege = pickEstablishment(raw, params, siret, near);
   const provenance: Provenance = {
     source: SOURCE,
     sourceRecordId: raw.siren,
@@ -220,6 +300,11 @@ function toCompany(
     region: siege.region ?? null,
     headcountRange: raw.tranche_effectif_salarie ?? null,
     createdDate: raw.date_creation ?? null,
+    establishments: {
+      total: count(raw.nombre_etablissements),
+      open: count(raw.nombre_etablissements_ouverts),
+    },
+    finances: toFinances(raw.finances),
     diffusionStatus: raw.statut_diffusion ?? null,
     provenance,
   };
@@ -229,6 +314,15 @@ function clampPerPage(perPage: number | undefined): number {
   return Math.min(perPage ?? MAX_PER_PAGE, MAX_PER_PAGE);
 }
 
+function clampPage(page: number | undefined): number {
+  return Math.max(page ?? 1, 1);
+}
+
+function clampRadius(radiusKm: number | undefined): number {
+  const value = radiusKm ?? DEFAULT_RADIUS_KM;
+  return Math.min(Math.max(value, 0), MAX_RADIUS_KM) || DEFAULT_RADIUS_KM;
+}
+
 /**
  * Build the search URL. Exported for inspection/debugging — the URL doubles
  * as the cache key, so it serializes params in a fixed order.
@@ -236,6 +330,10 @@ function clampPerPage(perPage: number | undefined): number {
 export function buildCompanySearchUrl(params: CompanySearchParams): string {
   const qs = new URLSearchParams();
   if (params.query) qs.set("q", params.query);
+  if (params.managerName) qs.set("nom_personne", params.managerName);
+  if (params.managerFirstName) {
+    qs.set("prenoms_personne", params.managerFirstName);
+  }
   if (params.naf?.length) qs.set("activite_principale", params.naf.join(","));
   if (params.region) qs.set("region", params.region);
   if (params.department) qs.set("departement", params.department);
@@ -249,9 +347,25 @@ export function buildCompanySearchUrl(params: CompanySearchParams): string {
   // Active establishments only — callers who need dissolved companies can
   // query the API directly.
   qs.set("etat_administratif", "A");
-  qs.set("page", String(Math.max(params.page ?? 1, 1)));
+  qs.set("page", String(clampPage(params.page)));
   qs.set("per_page", String(clampPerPage(params.perPage)));
   return `${SEARCH_ENDPOINT}?${qs.toString()}`;
+}
+
+/**
+ * Build the geographic search URL (`GET /near_point`). Same role as
+ * {@link buildCompanySearchUrl}: deterministic, doubles as the cache key.
+ * The radius is in kilometres, 1 by default, 50 at most (API limit).
+ */
+export function buildCompanyNearbyUrl(params: CompanyNearbyParams): string {
+  const qs = new URLSearchParams();
+  qs.set("lat", String(params.latitude));
+  qs.set("long", String(params.longitude));
+  qs.set("radius", String(clampRadius(params.radiusKm)));
+  if (params.naf?.length) qs.set("activite_principale", params.naf.join(","));
+  qs.set("page", String(clampPage(params.page)));
+  qs.set("per_page", String(clampPerPage(params.perPage)));
+  return `${NEARBY_ENDPOINT}?${qs.toString()}`;
 }
 
 export interface RechercheEntreprisesOptions {
@@ -287,16 +401,40 @@ export class RechercheEntreprisesClient {
     const page = await this.loadPage(url);
     const query = params.query?.replace(/\s+/g, "") ?? "";
     const siret = /^[0-9]{14}$/.test(query) ? query : undefined;
-
     return {
       records: page.results.map((raw) =>
         toCompany(raw, fetchedAt, params, siret),
       ),
-      total: page.total ?? page.results.length,
-      page: page.page ?? Math.max(params.page ?? 1, 1),
-      perPage: page.perPage ?? clampPerPage(params.perPage),
-      maskedCount: page.maskedCount,
+      ...paging(page, params),
     };
+  }
+
+  /**
+   * Companies around a point (`GET /near_point`), the closest establishment
+   * of each one reported with its distance to the point. Records are ordered
+   * by that distance, nearest first; unlocated ones come last.
+   */
+  async searchNearby(params: CompanyNearbyParams): Promise<CompanyNearbyResult> {
+    const url = buildCompanyNearbyUrl(params);
+    const fetchedAt = new Date().toISOString();
+    const page = await this.loadPage(url);
+    const here: Point = { latitude: params.latitude, longitude: params.longitude };
+    const records: NearbyCompany[] = page.results.map((raw) => {
+      const company = toCompany(raw, fetchedAt, {}, undefined, here);
+      const there =
+        company.latitude === null || company.longitude === null
+          ? null
+          : { latitude: company.latitude, longitude: company.longitude };
+      return {
+        ...company,
+        distanceMetres: there ? metresBetween(here, there) : null,
+      };
+    });
+    records.sort(
+      (a, b) =>
+        (a.distanceMetres ?? Infinity) - (b.distanceMetres ?? Infinity),
+    );
+    return { records, ...paging(page, params) };
   }
 
   /**
@@ -328,4 +466,20 @@ export class RechercheEntreprisesClient {
     }
     return masked;
   }
+}
+
+/** The paging envelope shared by both result types. */
+function paging(
+  page: MaskedPage,
+  params: { page?: number; perPage?: number },
+): Omit<CompanySearchResult, "records"> {
+  const total = page.total ?? page.results.length;
+  const perPage = page.perPage ?? clampPerPage(params.perPage);
+  return {
+    total,
+    page: page.page ?? clampPage(params.page),
+    perPage,
+    totalPages: page.totalPages ?? Math.ceil(total / perPage),
+    maskedCount: page.maskedCount,
+  };
 }

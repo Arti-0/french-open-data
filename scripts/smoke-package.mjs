@@ -23,7 +23,8 @@ try {
     const installed = join(temp, "node_modules", "french-open-data");
     const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
     assert.equal(manifest.exports["."].import, "./dist/index.js");
-    const { RechercheEntreprisesClient } = await import(pathToFileURL(join(installed, "dist", "index.js")).href);
+    const { RechercheEntreprisesClient, StorageCache } = await import(pathToFileURL(join(installed, "dist", "index.js")).href);
+    assert.equal(typeof StorageCache, "function");
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response(JSON.stringify({
       results: [
